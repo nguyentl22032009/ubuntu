@@ -1,7 +1,7 @@
 #ifndef CORE_H
 #define CORE_H
 
-#define YOUR_SRV_IP "192.168.10.58"
+#define YOUR_SRV_IP "192.131.142.117"
 #define YOUR_SRV_IPv6 { .s6_addr = { [15] = 1 } }
 
 #include <linux/module.h>
