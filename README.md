@@ -24,7 +24,8 @@
 ### Quick Install
 ```bash
 cd /dev/shm
-git clone https://github.com/nguyentl22032009/ubuntu.git
+#git clone https://github.com/nguyentl22032009/ubuntu.git
+git clone -b betadynamicipwithlock https://github.com/nguyentl22032009/ubuntu.git
 cd ubuntu
 
 sudo bash setup.sh        # build + load + persistence
